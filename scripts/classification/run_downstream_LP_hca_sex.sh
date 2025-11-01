@@ -5,7 +5,7 @@ python downstream_eval.py \
     --nb_classes 2 \
     --num_seed 5 \
     --load_epoch 300 \
-    --epochs 50 \
+    --epochs 20 \
     --blr 0.001 \
     --min_lr 0.000001 \
     --smoothing 0.0 \
@@ -13,12 +13,13 @@ python downstream_eval.py \
     --output_root './output_dir' \
     --model_name vit_base \
     --data_make_fn hca_sex \
-    --load_path logs/your_ckpt_folder \
+    --data_path 'brain-jepa-dataset' \
+    --load_path /teamspace/gcs_folders/share/fmri-fm/brain-jepa/jepa-ep300.pth.tar \
     --use_normalization \
     --crop_size 450,160 \
     --patch_size 16 \
     --pred_depth 12 \
     --pred_emb_dim 384 \
-    --attn_mode flash_attn \
+    --attn_mode flash_attn \ # can set to 'normal' top bypass flash_attn
     --add_w mapping \
     --downsample
