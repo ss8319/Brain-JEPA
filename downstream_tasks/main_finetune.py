@@ -61,7 +61,7 @@ def main(args):
             pin_mem=args.pin_mem,
             num_workers=args.num_workers,
             drop_last=False,
-            processed_dir=f'path/to/dataset',
+            processed_dir=getattr(args, 'data_path', 'data'),
             use_normalization=args.use_normalization,
             downsample=args.downsample
         )

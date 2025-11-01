@@ -66,7 +66,7 @@ def main(args):
             rank=0,
             drop_last=False,
             data_split=[0.6, 0.2, 0.2],
-            processed_dir=f'path/to/data',
+            processed_dir=getattr(args, 'data_path', 'data'),
             use_normalization=args.use_normalization,
             label_normalization=args.label_normalization,
             downsample=args.downsample

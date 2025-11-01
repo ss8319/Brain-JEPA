@@ -18,7 +18,7 @@ class VisionTransformer(nn.Module):
     def __init__(self, args, model_name='vit_base', attn_mode='flash_attn', global_pool=False, add_w=False, device=None, norm_layer=partial(nn.LayerNorm, eps=1e-6), embed_dim=None, num_classes=2):
         super(VisionTransformer, self).__init__()
         
-        gradient_csv_path = '/home/project/11001932/ruilin/ijepa/dataset/ukbiobank/gradient_mapping_450.csv'
+        gradient_csv_path = '/teamspace/studios/this_studio/Brain-JEPA/data/gradient_mapping_450.csv'
         def load_gradient():
             df = pd.read_csv(gradient_csv_path, header=None)
             gradient = torch.tensor(df.values, dtype=torch.float32)
