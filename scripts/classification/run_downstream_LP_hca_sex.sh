@@ -20,6 +20,6 @@ python downstream_eval.py \
     --patch_size 16 \
     --pred_depth 12 \
     --pred_emb_dim 384 \
-    --attn_mode flash_attn \ # can set to 'normal' top bypass flash_attn
+    --attn_mode normal \
     --add_w mapping \
     --downsample
