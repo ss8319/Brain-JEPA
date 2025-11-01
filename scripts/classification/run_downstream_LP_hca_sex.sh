@@ -1,11 +1,11 @@
 python downstream_eval.py \
     --downstream_task linear_probe \
     --task classification \
-    --batch_size 64 \
+    --batch_size 32 \
     --nb_classes 2 \
     --num_seed 5 \
     --load_epoch 300 \
-    --epochs 20 \
+    --epochs 50 \
     --blr 0.001 \
     --min_lr 0.000001 \
     --smoothing 0.0 \
@@ -13,7 +13,7 @@ python downstream_eval.py \
     --output_root './output_dir' \
     --model_name vit_base \
     --data_make_fn hca_sex \
-    --data_path 'brain-jepa-dataset' \
+    --data_path 's3://medarc/fmri-fm/datasets/hcp-parc-v2' \
     --load_path /teamspace/gcs_folders/share/fmri-fm/brain-jepa/jepa-ep300.pth.tar \
     --use_normalization \
     --crop_size 450,160 \
