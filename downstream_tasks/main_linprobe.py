@@ -63,7 +63,10 @@ def main(args):
             batch_size=args.batch_size,
             pin_mem=args.pin_mem,
             num_workers=args.num_workers,
+            #world_size=1, # for reference original Brain-JEPA code has this
+            #rank=0, # for reference original Brain-JEPA code has this
             drop_last=False,
+            #data_split=[0.6, 0.2, 0.2],  # for reference original Brain-JEPA code has this
             processed_dir=getattr(args, 'data_path', 'data'),
             use_normalization=args.use_normalization,
             label_normalization=args.label_normalization,
