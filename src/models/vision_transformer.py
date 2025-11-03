@@ -9,6 +9,7 @@ import numpy as np
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from src.utils.tensors import (
     trunc_normal_,
@@ -224,9 +225,13 @@ class Attention(nn.Module):
 
             x = (attn @ v).transpose(1, 2)
         elif self.attn_mode == 'flash_attn':
-            x = flash_attn_qkvpacked_func(qkv, dropout_p=self.proj_drop_rate)
-            if return_attn:
-                x, attn, _ = flash_attn_qkvpacked_func(qkv, dropout_p=self.proj_drop_rate)
+            qkv = qkv.permute(2, 0, 3, 1, 4)  # [3, B, h, N, d]
+            q, k, v = qkv[0], qkv[1], qkv[2]
+            x = F.scaled_dot_product_attention(q, k, v)
+            attn = None
+            # x = flash_attn_qkvpacked_func(qkv, dropout_p=self.proj_drop_rate)
+            # if return_attn:
+            #     x, attn, _ = flash_attn_qkvpacked_func(qkv, dropout_p=self.proj_drop_rate)
         else:
             raise Exception('error')
         x = x.reshape(B, N, C)
