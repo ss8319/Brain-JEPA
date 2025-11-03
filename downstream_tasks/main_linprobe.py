@@ -5,7 +5,6 @@
 # --------------------------------------------------------
 
 import sys
-sys.path.append('/home/users/nus/li.rl/scratch/code/ijepa')
 import datetime
 import json
 import numpy as np
@@ -28,10 +27,16 @@ from downstream_tasks.util.misc import NativeScalerWithGradNormCount as NativeSc
 from downstream_tasks.util.lars import LARS
 
 from src.datasets.hca_sex_datasets import make_hca_sex
+from src.datasets.hcya_sex_datasets import make_hcya_sex
 
 from downstream_tasks.models_vit import VisionTransformer
 
 from downstream_tasks.engine_finetune import train_one_epoch, evaluate
+
+DATA_FN_DICT = {
+    "hca_sex": make_hca_sex,
+    "hcya_sex": make_hcya_sex,
+}
 
 
 def main(args):
@@ -52,12 +57,9 @@ def main(args):
         log_writer = SummaryWriter(log_dir=args.log_dir)
     else:
         log_writer = None
-    
-    if args.data_make_fn == 'hca_sex':
-        if args.data_make_fn == 'hca_sex':
-            data_fn = make_hca_sex
-        else:
-            raise "data function {} not implemented!"
+
+    if args.data_make_fn in DATA_FN_DICT:
+        data_fn = DATA_FN_DICT[args.data_make_fn]
         
         data_loader_train, data_loader_val, data_loader_test, train_dataset, valid_dataset, test_dataset = data_fn(
             batch_size=args.batch_size,
