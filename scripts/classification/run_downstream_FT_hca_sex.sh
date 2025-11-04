@@ -1,25 +1,26 @@
 python downstream_eval.py \
     --downstream_task fine_tune \
     --task classification \
-    --batch_size 16 \
+    --batch_size 2 \
+    --accum_iter 16 \
     --nb_classes 2 \
     --num_seed 5 \
     --load_epoch 300 \
     --epochs 50 \
-    --blr 0.001 \
+    --blr 0.1 \
     --min_lr 0.000001 \
     --smoothing 0.0 \
     --config configs/downstream/fine_tune.yaml \
     --output_root './output_dir' \
     --model_name vit_base \
     --data_make_fn hca_sex \
-    --data_path 'data/processed/hca_lifespan' \
+    --data_path 's3://medarc/fmri-fm/datasets/hcp-parc-v2' \
     --load_path /teamspace/gcs_folders/share/fmri-fm/brain-jepa/jepa-ep300.pth.tar \
     --use_normalization \
     --crop_size 450,160 \
     --patch_size 16 \
     --pred_depth 12 \
     --pred_emb_dim 384 \
-    --attn_mode flash_attn \ # can set to 'normal' top bypass flash_attn
+    --attn_mode normal \
     --add_w mapping \
     --downsample 

@@ -35,6 +35,8 @@ def get_args_parser():
 
     parser.add_argument('--batch_size', default=20, type=int,
                         help='Batch size per GPU (effective batch size is batch_size * accum_iter * # gpus')
+    parser.add_argument('--accum_iter', default=None, type=int,
+                        help='Gradient accumulation iterations (effective batch size = batch_size * accum_iter)')
     parser.add_argument('--epochs', default=20, type=int)
     parser.add_argument('--blr', default=0.01, type=float)
     parser.add_argument('--min_lr', default=0.000001, type=float)
