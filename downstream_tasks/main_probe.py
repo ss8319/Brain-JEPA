@@ -78,37 +78,46 @@ def main(args: DictConfig):
     train_loader, test_loader, eval_loaders = create_data_loaders(args)
 
     # backbone embedding model
-    if args.pretrain_ckpt:
-        print(f"creating backbone model from checkpoint: {args.pretrain_ckpt}")
-        ckpt = torch.load(args.pretrain_ckpt, map_location="cpu", weights_only=True)
-        ckpt_args = OmegaConf.create(ckpt["args"])
-        backbone = MODELS_DICT[ckpt_args.model](
-            img_size=ckpt_args.img_size,
-            in_chans=ckpt_args.in_chans,
-            patch_size=ckpt_args.patch_size,
-            num_frames=ckpt_args.num_frames,
-            t_patch_size=ckpt_args.t_patch_size,
-            **ckpt_args.model_kwargs,
+    if args.get("load_path") or args.get("pretrain_ckpt"):
+        load_path = args.get("load_path") or args.get("pretrain_ckpt")
+        print(f"creating backbone model from checkpoint: {load_path}")
+        checkpoint = torch.load(load_path, map_location="cpu")
+        # Load Brain-JEPA checkpoint format (target_encoder)
+        if "target_encoder" in checkpoint:
+            state_dict = checkpoint["target_encoder"]
+        else:
+            state_dict = checkpoint
+        
+        # Create model using args
+        backbone = VisionTransformer(
+            args,
+            model_name=args.get("model_name", "vit_base"),
+            attn_mode=args.get("attn_mode", "normal"),
+            device=device,
+            add_w=args.get("add_w", False)
         )
-        backbone.load_state_dict(ckpt["model"])
+        
+        # Remove keys that don't exist in encoder (head, fc_norm)
+        state_dict = {k: v for k, v in state_dict.items() 
+                     if not k.startswith("head.") and not k.startswith("fc_norm.")}
+        backbone.encoder.load_state_dict(state_dict, strict=False)
     else:
-        print(f"creating backbone model from scratch: {args.model}")
-        backbone = MODELS_DICT[args.model](
-            img_size=args.img_size,
-            in_chans=args.in_chans,
-            patch_size=args.patch_size,
-            num_frames=args.num_frames,
-            t_patch_size=args.t_patch_size,
-            **args.model_kwargs,
+        print(f"creating backbone model from scratch")
+        backbone = VisionTransformer(
+            args,
+            model_name=args.get("model_name", "vit_base"),
+            attn_mode=args.get("attn_mode", "normal"),
+            device=device,
+            add_w=args.get("add_w", False)
         )
 
-    if not args.finetune:
+    if not args.get("finetune", False):
         print("freezing backbone model")
-        backbone.requires_grad_(False)
+        backbone.encoder.requires_grad_(False)
         backbone_param_groups = []
     else:
         print("finetuning backbone model")
-        backbone_param_groups = ut.get_param_groups(backbone)
+        backbone_param_groups = [{"params": [p for p in backbone.encoder.parameters() if p.requires_grad]}]
 
     backbone.to(device)
     embedding_shapes = get_embedding_shapes(backbone, args.representations, train_loader, device)
