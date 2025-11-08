@@ -8,12 +8,19 @@ import argparse
 import datetime
 import json
 import math
+import os
+import sys
 import time
 from collections import defaultdict
 from functools import partial
 from itertools import product
 from pathlib import Path
 from typing import Iterable, Sequence, Optional, Union, List, Dict, Tuple
+
+# Add project root to path for imports when running script directly
+_project_root = Path(__file__).parent.parent
+if str(_project_root) not in sys.path:
+    sys.path.insert(0, str(_project_root))
 
 import numpy as np
 import torch
