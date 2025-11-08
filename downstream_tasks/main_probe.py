@@ -13,7 +13,7 @@ from collections import defaultdict
 from functools import partial
 from itertools import product
 from pathlib import Path
-from typing import Iterable, Sequence
+from typing import Iterable, Sequence, Optional, Union, List, Dict, Tuple
 
 import numpy as np
 import torch
@@ -24,11 +24,16 @@ from torch.utils.data import DataLoader, Subset
 from torch.utils.data.distributed import DistributedSampler
 from timm.utils import accuracy
 
-import data.flat_data as flat_data
 import downstream_tasks.models_probe as models_probe
 import downstream_tasks.util.misc as misc
-import flat_mae.masking as masking
 from downstream_tasks.models_vit import VisionTransformer
+from src.datasets.hca_sex_datasets import make_hca_sex
+from src.datasets.hcya_sex_datasets import make_hcya_sex
+
+DATA_FN_DICT = {
+    "hca_sex": make_hca_sex,
+    "hcya_sex": make_hcya_sex,
+}
 
 DEFAULT_CONFIG = Path(__file__).parent / "config/default_probe.yaml"
 
@@ -325,78 +330,87 @@ def main(args: DictConfig):
     print(f"done! training time: {datetime.timedelta(seconds=int(total_time))}")
 
 
+def probe_collate_fn(batch):
+    """
+    Convert Brain-JEPA's (samples, targets) tuple format to probe's dict format.
+    Brain-JEPA returns: (samples, targets) where samples is [B, C, H, W]
+    Probe expects: {"image": tensor, "target": tensor, "img_mask": optional}
+    """
+    samples, targets = zip(*batch)
+    samples = torch.stack(samples, dim=0)
+    targets = torch.stack(targets, dim=0) if isinstance(targets[0], torch.Tensor) else torch.tensor(targets)
+    return {
+        "image": samples,
+        "target": targets,
+        # img_mask is not used by Brain-JEPA, set to None
+        "img_mask": None
+    }
+
+
 def create_data_loaders(args: DictConfig):
-    data_loaders = {}
-    dataset_names = [args.train_dataset, args.val_dataset, args.test_dataset] + args.eval_datasets
-
-    transform = flat_data.make_flat_transform(
-        img_size=args.img_size,
-        clip_vmax=args.clip_vmax,
-        normalize=args.normalize,
-        target_id_map=args.target_id_map,
-        target_key=args.target_key,
+    """
+    Create data loaders using Brain-JEPA's dataset functions (make_hca_sex or make_hcya_sex).
+    Returns loaders in probe's expected format.
+    """
+    # Determine which dataset function to use
+    data_make_fn = args.get("data_make_fn", "hca_sex")
+    if data_make_fn not in DATA_FN_DICT:
+        raise ValueError(f"Unknown data_make_fn: {data_make_fn}. Must be one of {list(DATA_FN_DICT.keys())}")
+    
+    data_fn = DATA_FN_DICT[data_make_fn]
+    
+    # Use Brain-JEPA's data loading function
+    data_loader_train, data_loader_val, data_loader_test, train_dataset, valid_dataset, test_dataset = data_fn(
+        batch_size=args.batch_size,
+        collator=None,  # We'll use probe_collate_fn instead
+        pin_mem=True,
+        num_workers=args.num_workers,
+        drop_last=False,  # Don't drop last for probe evaluation
+        processed_dir=args.get("data_path", "data"),
+        use_normalization=args.get("use_normalization", False),
+        label_normalization=args.get("label_normalization", False),
+        downsample=args.get("downsample", False),
+        make_constant=args.get("make_constant", False),
     )
-
-    for dataset_name in dataset_names:
-        if dataset_name is None or dataset_name in data_loaders:
-            continue
-
-        dataset_config = args.datasets[dataset_name].copy()
-        print(f"loading dataset: {dataset_name}\n\n{OmegaConf.to_yaml(dataset_config)}")
-
-        # only support pre-clipped datasets
-        dataset = flat_data.FlatClipsDataset(dataset_config.root, transform=transform)
-
-        # subset split
-        split_range = dataset_config.get("split_range")
-        if split_range is not None:
-            split_start, split_stop = split_range
-            if isinstance(split_stop, float):
-                split_start = int(split_start * len(dataset))
-                split_stop = int(split_stop * len(dataset))
-            shuffle_seed = dataset_config.get("shuffle_seed", 42)
-            rng = np.random.default_rng(shuffle_seed)
-            sample_order = rng.permutation(len(dataset))
-            split_indices = sample_order[split_start:split_stop]
-            print(f"split indices: {split_indices[:10].tolist()}")
-            dataset = Subset(dataset, split_indices)
-
-        if args.distributed:
-            sampler = DistributedSampler(dataset, shuffle=dataset_config.shuffle)
-        else:
-            sampler = None
-        shuffle = sampler is None and dataset_config.shuffle
-
-        # The pretrain script uses WebLoader, but for our pre-clipped data,
-        # the standard PyTorch DataLoader is more direct and easier to debug.
-        loader = DataLoader(
+    
+    # Wrap loaders to convert (samples, targets) -> {"image": samples, "target": targets}
+    # We need to create new DataLoaders with the probe_collate_fn
+    def wrap_loader(loader, dataset):
+        if loader is None:
+            return None
+        return DataLoader(
             dataset,
-            batch_size=args.batch_size,
-            sampler=sampler,
-            shuffle=shuffle,
-            num_workers=args.num_workers,
-            collate_fn=masking.mask_collate,  # needed to pad img mask
-            pin_memory=True,
-            drop_last=True,  # nb, changes the dataset, prob shouldn't do
+            batch_size=loader.batch_size,
+            sampler=loader.sampler,
+            shuffle=False,  # Sampler handles shuffling
+            num_workers=loader.num_workers,
+            collate_fn=probe_collate_fn,
+            pin_memory=loader.pin_memory,
+            drop_last=loader.drop_last,
         )
-
-        data_loaders[dataset_name] = loader
-
-    train_loader = data_loaders.pop(args.train_dataset)
-    test_loader = data_loaders.pop(args.test_dataset) if args.test_dataset else None
-    return train_loader, test_loader, data_loaders
+    
+    train_loader = wrap_loader(data_loader_train, train_dataset)
+    test_loader = wrap_loader(data_loader_test, test_dataset) if data_loader_test is not None else None
+    
+    # Create eval_loaders dict
+    eval_loaders = {}
+    if data_loader_val is not None:
+        eval_loaders[args.val_dataset] = wrap_loader(data_loader_val, valid_dataset)
+    
+    return train_loader, test_loader, eval_loaders
 
 
 @torch.no_grad()
 def get_embedding_shapes(
     backbone: nn.Module,
-    representations: list[str],
+    representations: List[str],
     loader: Iterable,
     device: torch.device,
 ):
     print("running backbone on example batch to get embedding shapes")
     example_batch = next(iter(loader))
-    example_batch = ut.send_data(example_batch, device)
+    # Move batch to device
+    example_batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in example_batch.items()}
     images = example_batch["image"]
     img_mask = example_batch.get("img_mask")
 
@@ -409,7 +423,7 @@ def get_embedding_shapes(
     return embedding_shapes
 
 
-def make_classifiers(args: DictConfig, embedding_shapes: dict[str, tuple[int, ...]]):
+def make_classifiers(args: DictConfig, embedding_shapes: Dict[str, Tuple[int, ...]]):
     # create sweep of classifier heads with varying input features,
     # lr scales, weight decays.
     all_classifiers = {}
@@ -457,11 +471,11 @@ def train_one_epoch(
     criterion: nn.Module,
     data_loader: Iterable,
     optimizer: torch.optim.Optimizer,
-    loss_scaler: torch.GradScaler | None,
+    loss_scaler: Optional[torch.GradScaler],
     lr_schedule: Sequence[float],
     epoch: int,
     device: torch.device,
-    log_classifier_keys: list[tuple[str, tuple[float, float]]],
+    log_classifier_keys: List[Tuple[str, Tuple[float, float]]],
 ):
     model.train()
 
@@ -579,7 +593,7 @@ def evaluate(
     epoch: int,
     device: torch.device,
     eval_name: str,
-    log_classifier_keys: list[tuple[str, tuple[float, float]]],
+    log_classifier_keys: List[Tuple[str, Tuple[float, float]]],
 ):
     """
     log_classifier_keys: list of (feature_source, hparams) keys for the classifiers to log.
@@ -679,7 +693,7 @@ def format_clf_key(key: tuple[str, tuple[float, float]]) -> str:
 def get_best_classifiers(
     args: DictConfig,
     model: models_probe.ClassificationWrapper,
-    eval_stats: dict[str, float],
+    eval_stats: Dict[str, float],
 ):
     val_scores = defaultdict(list)
     clf_hparams = defaultdict(list)
