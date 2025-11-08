@@ -98,7 +98,9 @@ def load_args_from_yaml(file_path):
 
 def update_config_with_args(config, args):
     for key, value in vars(args).items():
-        setattr(config, key, value)
+        # Skip None values to preserve YAML defaults
+        if value is not None:
+            setattr(config, key, value)
     return config
 
 
