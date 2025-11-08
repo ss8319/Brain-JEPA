@@ -54,15 +54,25 @@ def warmup_cosine_schedule(base_value, final_value, total_iters, warmup_iters):
     return schedule
 
 
-def main(args: DictConfig):
+def _get_arg(args, key, default=None):
+    """Helper to get optional args values (works with OmegaConf DictConfig and Config/Namespace objects)"""
+    # OmegaConf DictConfig has .get() method
+    if hasattr(args, 'get') and callable(getattr(args, 'get', None)):
+        return args.get(key, default)
+    # Config/Namespace objects use getattr
+    return getattr(args, key, default)
+
+
+def main(args):
     # setup
     misc.init_distributed_mode(args)
     global_rank = misc.get_rank()
     is_master = global_rank == 0
     world_size = misc.get_world_size()
-    device = torch.device(args.device)
-    torch.manual_seed(args.seed)
-    np.random.seed(args.seed)
+    device = torch.device(_get_arg(args, 'device', 'cuda'))
+    seed = _get_arg(args, 'seed', 0)
+    torch.manual_seed(seed)
+    np.random.seed(seed)
 
     if args.name and not args.output_dir.endswith(args.name):
         args.output_dir = f"{args.output_dir}/{args.name}"
@@ -97,8 +107,8 @@ def main(args: DictConfig):
     train_loader, test_loader, eval_loaders = create_data_loaders(args)
 
     # backbone embedding model
-    if args.get("load_path") or args.get("pretrain_ckpt"):
-        load_path = args.get("load_path") or args.get("pretrain_ckpt")
+    if _get_arg(args, "load_path") or _get_arg(args, "pretrain_ckpt"):
+        load_path = _get_arg(args, "load_path") or _get_arg(args, "pretrain_ckpt")
         print(f"creating backbone model from checkpoint: {load_path}")
         checkpoint = torch.load(load_path, map_location="cpu")
         # Load Brain-JEPA checkpoint format (target_encoder)
@@ -110,10 +120,10 @@ def main(args: DictConfig):
         # Create model using args
         backbone = VisionTransformer(
             args,
-            model_name=args.get("model_name", "vit_base"),
-            attn_mode=args.get("attn_mode", "normal"),
+            model_name=_get_arg(args, "model_name", "vit_base"),
+            attn_mode=_get_arg(args, "attn_mode", "normal"),
             device=device,
-            add_w=args.get("add_w", False)
+            add_w=_get_arg(args, "add_w", False)
         )
         
         # Remove keys that don't exist in encoder (head, fc_norm)
@@ -124,13 +134,13 @@ def main(args: DictConfig):
         print(f"creating backbone model from scratch")
         backbone = VisionTransformer(
             args,
-            model_name=args.get("model_name", "vit_base"),
-            attn_mode=args.get("attn_mode", "normal"),
+            model_name=_get_arg(args, "model_name", "vit_base"),
+            attn_mode=_get_arg(args, "attn_mode", "normal"),
             device=device,
-            add_w=args.get("add_w", False)
+            add_w=_get_arg(args, "add_w", False)
         )
 
-    if not args.get("finetune", False):
+    if not _get_arg(args, "finetune", False):
         print("freezing backbone model")
         backbone.encoder.requires_grad_(False)
         backbone_param_groups = []
@@ -160,42 +170,53 @@ def main(args: DictConfig):
     # todo: compile?
 
     # optimizer
-    total_batch_size = args.batch_size * args.accum_iter * world_size
+    batch_size = _get_arg(args, "batch_size", 32)
+    accum_iter = _get_arg(args, "accum_iter", 1)
+    total_batch_size = batch_size * accum_iter * world_size
     print(
         f"total batch size: {total_batch_size} = "
-        f"{args.batch_size} bs per gpu x {args.accum_iter} accum x {world_size} gpus"
+        f"{batch_size} bs per gpu x {accum_iter} accum x {world_size} gpus"
     )
 
-    if not args.get("lr"):
-        args.lr = args.base_lr * total_batch_size / 256
-        print(f"lr: {args.lr:.2e} = {args.base_lr:.2e} x {total_batch_size} / 256")
+    lr = _get_arg(args, "lr")
+    if not lr:
+        base_lr = _get_arg(args, "base_lr", 0.001)
+        lr = base_lr * total_batch_size / 256
+        args.lr = lr  # Set it for later use
+        print(f"lr: {lr:.2e} = {base_lr:.2e} x {total_batch_size} / 256")
     else:
-        print(f"lr: {args.lr:.2e}")
+        args.lr = lr
+        print(f"lr: {lr:.2e}")
 
     param_groups = backbone_param_groups + classifier_param_groups
     # Set initial LR and weight decay for all param groups
     # Note: lr_multiplier and wd_multiplier are set by make_classifiers() for classifier heads
+    weight_decay = _get_arg(args, "weight_decay", 0.05)
     for pg in param_groups:
         lr_multiplier = pg.get("lr_multiplier", 1.0)
         wd_multiplier = pg.get("wd_multiplier", 1.0)
-        pg.setdefault("lr", args.lr * lr_multiplier)
-        pg.setdefault("weight_decay", args.weight_decay * wd_multiplier)
+        pg.setdefault("lr", lr * lr_multiplier)
+        pg.setdefault("weight_decay", weight_decay * wd_multiplier)
     # cast or else it corrupts the checkpoint
     betas = tuple(args.betas) if args.betas is not None else None
     optimizer = torch.optim.AdamW(param_groups, betas=betas)
 
     epoch_num_batches = len(train_loader)
-    steps_per_epoch = epoch_num_batches // args.accum_iter
-    total_steps = args.epochs * steps_per_epoch
-    warmup_steps = args.warmup_epochs * steps_per_epoch
+    accum_iter = _get_arg(args, "accum_iter", 1)
+    steps_per_epoch = epoch_num_batches // accum_iter
+    epochs = _get_arg(args, "epochs", 50)
+    warmup_epochs = _get_arg(args, "warmup_epochs", 5)
+    total_steps = epochs * steps_per_epoch
+    warmup_steps = warmup_epochs * steps_per_epoch
+    min_lr = _get_arg(args, "min_lr", 1e-6)
     lr_schedule = warmup_cosine_schedule(
-        base_value=args.lr,
-        final_value=args.min_lr,
+        base_value=lr,
+        final_value=min_lr,
         total_iters=total_steps,
         warmup_iters=warmup_steps,
     )
-    print(f"full schedule: epochs = {args.epochs} (steps = {total_steps})")
-    print(f"warmup: epochs = {args.warmup_epochs} (steps = {warmup_steps})")
+    print(f"full schedule: epochs = {epochs} (steps = {total_steps})")
+    print(f"warmup: epochs = {warmup_epochs} (steps = {warmup_steps})")
 
     # loss scaling not needed for bfloat16 (according to timm)
     if args.amp and args.amp_dtype != "bfloat16":
@@ -302,7 +323,7 @@ def main(args: DictConfig):
             test_loader,
             epoch,
             device,
-            args.test_dataset,
+            _get_arg(args, "test_dataset", "test"),
             log_classifier_keys=log_classifier_keys,
         )
         print(f"Best models test stats:\n{json.dumps(test_stats)}")
@@ -353,7 +374,7 @@ def create_data_loaders(args: DictConfig):
     Returns loaders in probe's expected format.
     """
     # Determine which dataset function to use
-    data_make_fn = args.get("data_make_fn", "hca_sex")
+    data_make_fn = _get_arg(args, "data_make_fn", "hca_sex")
     if data_make_fn not in DATA_FN_DICT:
         raise ValueError(f"Unknown data_make_fn: {data_make_fn}. Must be one of {list(DATA_FN_DICT.keys())}")
     
@@ -366,11 +387,11 @@ def create_data_loaders(args: DictConfig):
         pin_mem=True,
         num_workers=args.num_workers,
         drop_last=False,  # Don't drop last for probe evaluation
-        processed_dir=args.get("data_path", "data"),
-        use_normalization=args.get("use_normalization", False),
-        label_normalization=args.get("label_normalization", False),
-        downsample=args.get("downsample", False),
-        make_constant=args.get("make_constant", False),
+        processed_dir=_get_arg(args, "data_path", "data"),
+        use_normalization=_get_arg(args, "use_normalization", False),
+        label_normalization=_get_arg(args, "label_normalization", False),
+        downsample=_get_arg(args, "downsample", False),
+        make_constant=_get_arg(args, "make_constant", False),
     )
     
     # Wrap loaders to convert (samples, targets) -> {"image": samples, "target": targets}
@@ -395,7 +416,8 @@ def create_data_loaders(args: DictConfig):
     # Create eval_loaders dict
     eval_loaders = {}
     if data_loader_val is not None:
-        eval_loaders[args.val_dataset] = wrap_loader(data_loader_val, valid_dataset)
+        val_dataset_name = _get_arg(args, "val_dataset", "valid")
+        eval_loaders[val_dataset_name] = wrap_loader(data_loader_val, valid_dataset)
     
     return train_loader, test_loader, eval_loaders
 
@@ -442,7 +464,7 @@ def make_classifiers(args: DictConfig, embedding_shapes: Dict[str, Tuple[int, ..
                 models_probe.AttnPoolClassifier,
                 embed_shape[-1],
                 args.num_classes,
-                embed_dim=args.get("attn_pool_embed_dim"),
+                embed_dim=_get_arg(args, "attn_pool_embed_dim"),
             )
 
         for lr_scale, weight_decay in product(args.lr_scale_grid, args.weight_decay_grid):
@@ -483,15 +505,16 @@ def train_one_epoch(
     metric_logger.add_meter("lr", misc.SmoothedValue(window_size=1, fmt="{value:.6f}"))
     metric_logger.add_meter("grad", misc.SmoothedValue())
     header = f"Train: [{epoch}]"
-    log_wandb = args.get("wandb", False) and misc.is_main_process()
+    log_wandb = _get_arg(args, "wandb", False) and misc.is_main_process()
 
     epoch_num_batches = len(data_loader)
-    steps_per_epoch = epoch_num_batches // args.accum_iter
+    accum_iter = _get_arg(args, "accum_iter", 1)
+    steps_per_epoch = epoch_num_batches // accum_iter
 
     use_cuda = device.type == "cuda"
     # Brain-JEPA doesn't use pre_send_to_cuda_wrapper
 
-    print_freq = args.get("print_freq", 20) if not args.debug else 1
+    print_freq = _get_arg(args, "print_freq", 20) if not _get_arg(args, "debug", False) else 1
     num_batches = epoch_num_batches if not args.debug else 10
 
     model_without_ddp = model.module if args.distributed else model
@@ -510,9 +533,9 @@ def train_one_epoch(
             batch = {k: v.to(device, non_blocking=True) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
 
         batch_step = batch_idx + 1
-        global_step = epoch * steps_per_epoch + batch_step // args.accum_iter
+        global_step = epoch * steps_per_epoch + batch_step // accum_iter
         lr = lr_schedule[global_step]
-        need_update = batch_step % args.accum_iter == 0
+        need_update = batch_step % accum_iter == 0
 
         if need_update:
             for pg in optimizer.param_groups:
@@ -547,13 +570,14 @@ def train_one_epoch(
             raise RuntimeError(f"Loss is {loss_value}, stopping training")
 
         # Backward pass with gradient accumulation
-        (loss / args.accum_iter).backward()
+        (loss / accum_iter).backward()
         if need_update:
             if loss_scaler is not None:
                 loss_scaler.unscale_(optimizer)
             grad_norm = misc.get_grad_norm_(model.parameters())
-            if args.get("clip_grad") is not None:
-                torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad)
+            clip_grad = _get_arg(args, "clip_grad")
+            if clip_grad is not None:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), clip_grad)
             if loss_scaler is not None:
                 loss_scaler.step(optimizer)
                 loss_scaler.update()
@@ -610,14 +634,14 @@ def evaluate(
 
     metric_logger = misc.MetricLogger(delimiter="  ")
     header = f"Eval ({eval_name}): [{epoch}]"
-    log_wandb = args.get("wandb", False) and misc.is_main_process()
+    log_wandb = _get_arg(args, "wandb", False) and misc.is_main_process()
 
     epoch_num_batches = len(data_loader)
 
     use_cuda = device.type == "cuda"
     # Brain-JEPA doesn't use pre_send_to_cuda_wrapper
 
-    print_freq = args.get("print_freq", 20) if not args.debug else 1
+    print_freq = _get_arg(args, "print_freq", 20) if not _get_arg(args, "debug", False) else 1
     num_batches = epoch_num_batches if not args.debug else 10
 
     model_without_ddp = model.module if args.distributed else model
@@ -704,7 +728,8 @@ def get_best_classifiers(
 ):
     val_scores = defaultdict(list)
     clf_hparams = defaultdict(list)
-    prefix = f"eval/{args.val_dataset}"
+    val_dataset_name = _get_arg(args, "val_dataset", "valid")
+    prefix = f"eval/{val_dataset_name}"
     for key in model.classifier_keys:
         feature_source, hparam = key
         if args.task == "classification":
