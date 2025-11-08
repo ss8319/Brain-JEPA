@@ -1,74 +1,86 @@
-import os
+import json
 import random
+from pathlib import Path
 from logging import getLogger
 
 import torch
 from torch.utils import data
 
-try:
-    from .s3_utils import ensure_s3_files_cached
-    HAS_S3_SUPPORT = True
-except ImportError:
-    HAS_S3_SUPPORT = False
-
 logger = getLogger()
 
+SPLIT_SHARD_RANGES = {
+    "train": (0, 1200),
+    "valid": (1200, 1600),
+    "test": (1600, 2000),
+}
 
-class HCP_sex_scale(data.Dataset):
+
+class HCPYA_sex_scale(data.Dataset):
     def __init__(
-        self, 
-        split='',
-        processed_dir='',
-        cache_dir='~/.cache/brain-jepa',
+        self,
+        split: str,
+        processed_dir: str,
         use_normalization=False,
         downsample=False,
         sampling_rate=3,
         num_frames=160,
+        keep_in_memory=True,
         make_constant=False,
     ):
+        self.split = split
+        self.processed_dir = processed_dir
         self.use_normalization = use_normalization
-        
+
         self.downsample = downsample
         self.sampling_rate = sampling_rate
         self.num_frames = num_frames
+        self.keep_in_memory = keep_in_memory
         self.make_constant = make_constant
-        
+
         self.n_rois = 450
         self.seq_length = 490
-        self.root_dir = ''
-        
-        # Handle S3 paths
-        if processed_dir.startswith('s3://'):
-            if not HAS_S3_SUPPORT:
-                raise ImportError("S3 support requires boto3. Install with: pip install boto3")
-            print(f"Detected S3 path: {processed_dir}")
-            processed_dir = ensure_s3_files_cached(processed_dir, cache_dir=cache_dir)
-            print(f"Using cached files from: {processed_dir}")
-        
-        os.makedirs(processed_dir, exist_ok=True)
-        
-        self.input_x_file = os.path.join(processed_dir, 'hca450_{}_x.pt'.format(split))
-        self.label_y_file = os.path.join(processed_dir, 'hca450_{}_y.pt'.format(split))
-        
-        self.input_xs = torch.load(self.input_x_file)
-        self.label_ys = torch.load(self.label_y_file)
-            
+
+        start, stop = SPLIT_SHARD_RANGES[split]
+        self.sample_paths = [
+            str(path)
+            for shard in range(start, stop)
+            for path in sorted(
+                (Path(processed_dir) / f"hcp-parc_{shard:04d}").glob("*_task-REST*_mag-3T_*.pt")
+            )
+        ]
+        if keep_in_memory:
+            self.samples = [
+                torch.load(path, map_location="cpu", weights_only=True)
+                for path in self.sample_paths
+            ]
+
+        with (Path(processed_dir) / "hcp_sex_target_id_map.json").open() as f:
+            self.target_map = json.load(f)
+
     def __len__(self):
-        return len(self.input_xs)
+        return len(self.sample_paths)
 
     def __getitem__(self, idx):
-        input_x, label_y = self.input_xs[idx], self.label_ys[idx]
-        input_x = input_x.float()
+        if self.keep_in_memory:
+            sample = self.samples[idx]
+        else:
+            path = self.sample_paths[idx]
+            sample = torch.load(path, map_location="cpu", weights_only=True)
+
+        input_x = sample["bold"] # [n_frames, n_rois]
+        assert len(input_x) >= self.seq_length
+        input_x = input_x[:self.seq_length].t().contiguous().float()  # [n_rois, n_frames]
+        label_y = self.target_map[sample["meta"]["sub"]]
 
         if self.use_normalization:
             mean = input_x.mean()
             std = input_x.std()
             input_x = (input_x - mean) / std
-        
+
         # replace time series with mean activity pattern
         if self.make_constant:
             input_x = input_x.mean(dim=1, keepdim=True).expand_as(input_x)
-        
+
         if self.downsample:
             clip_size = self.sampling_rate * self.num_frames
             start_idx, end_idx = self._get_start_end_idx(self.seq_length, clip_size)
@@ -77,10 +89,10 @@ class HCP_sex_scale(data.Dataset):
                     )
             input_x = torch.unsqueeze(ts_array, 0).to(torch.float32)
         else:
-            input_x = torch.unsqueeze(input_x, 0).to(torch.float32)    
-        
+            input_x = torch.unsqueeze(input_x, 0).to(torch.float32)
+
         return input_x.to(torch.float32), int(label_y)
-    
+
     def _get_start_end_idx(self, fmri_size, clip_size):
         "Reference: https://github.com/facebookresearch/mae_st"
         """
@@ -106,7 +118,7 @@ class HCP_sex_scale(data.Dataset):
         start_idx = random.uniform(0, delta)
         end_idx = start_idx + clip_size - 1
         return start_idx, end_idx
-    
+
     def _temporal_sampling(self, frames, start_idx, end_idx, num_samples):
         "Reference: https://github.com/facebookresearch/mae_st"
         """
@@ -126,29 +138,29 @@ class HCP_sex_scale(data.Dataset):
         index = torch.clamp(index, 0, frames.shape[1] - 1).long()
         new_frames = torch.index_select(frames, 1, index)
         return new_frames
-    
-    
-def make_hca_sex(
+
+
+def make_hcya_sex(
     batch_size,
     collator=None,
     pin_mem=True,
     num_workers=8,
     drop_last=True,
-    processed_dir='data/processed/hca_lifespan',
+    processed_dir='data/hcp_parc',
     use_normalization=False,
     label_normalization=False,
     downsample=False,
     make_constant=False,
 ):
     # train data loader
-    train_dataset = HCP_sex_scale(
-        split='train', 
+    train_dataset = HCPYA_sex_scale(
+        split='train',
         processed_dir=processed_dir,
         use_normalization=use_normalization,
         downsample=downsample,
         make_constant=make_constant,
     )
-    
+
     train_data_loader = torch.utils.data.DataLoader(
         train_dataset,
         collate_fn=collator,
@@ -159,14 +171,14 @@ def make_hca_sex(
         persistent_workers=False)
 
     # validation data loader
-    valid_dataset = HCP_sex_scale(
+    valid_dataset = HCPYA_sex_scale(
         split='valid',
         processed_dir=processed_dir,
         use_normalization=use_normalization,
         downsample=downsample,
         make_constant=make_constant,
     )
-    
+
     valid_data_loader = torch.utils.data.DataLoader(
         valid_dataset,
         collate_fn=collator,
@@ -177,14 +189,14 @@ def make_hca_sex(
         persistent_workers=False)
 
     # test data loader
-    test_dataset = HCP_sex_scale(
+    test_dataset = HCPYA_sex_scale(
         split='test',
         processed_dir=processed_dir,
         use_normalization=use_normalization,
         downsample=downsample,
         make_constant=make_constant,
     )
-    
+
     test_data_loader = torch.utils.data.DataLoader(
         test_dataset,
         collate_fn=collator,
@@ -193,7 +205,7 @@ def make_hca_sex(
         pin_memory=pin_mem,
         num_workers=num_workers,
         persistent_workers=False)
-    
+
     logger.info('hca_sex dataset created')
 
     return train_data_loader, valid_data_loader, test_data_loader, train_dataset, valid_dataset, test_dataset

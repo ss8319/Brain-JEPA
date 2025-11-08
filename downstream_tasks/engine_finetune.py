@@ -47,7 +47,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
         samples = samples.to(device, non_blocking=True)
         targets = targets.to(device, non_blocking=True)
         
-        context_autocast = torch.cuda.amp.autocast()
+        context_autocast = torch.amp.autocast(device_type="cuda")
             
         with context_autocast: 
             outputs = model(samples).squeeze()
@@ -129,7 +129,7 @@ def evaluate(args, data_loader, model, device, task):
         images = images.to(device, non_blocking=True)
         target = target.to(device, non_blocking=True)
         
-        context_autocast = torch.cuda.amp.autocast()
+        context_autocast = torch.amp.autocast(device_type="cuda")
         
         with context_autocast: 
             output = model(images).squeeze()

@@ -1,0 +1,16 @@
+# Source and output dataset paths.
+hcp_1200_dir: data/HCP_1200
+out_dir: data/hcp-parc
+
+# The restricted CSV contains the family ID, used for splitting the data into batches.
+# This is not publicly available and must be requested from HCP.
+hcp_restricted_csv: data/HCP_1200/hcp_1200_restricted.csv
+
+# Parcellation
+parcellation_path: data/Schaefer2018_400Parcels_17Networks_order_Tian_Subcortex_S3.dlabel.nii
+
+# Overwrite existing results.
+overwrite: false
+
+# Logging level.
+log_level: INFO

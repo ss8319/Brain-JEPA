@@ -73,6 +73,13 @@ Population-level brain gradient was derived from UKB data with [Brainspace toolb
 ## Checkpoints
 Checkpoints of the pre-trained model, and example fine-tuned model, can be downloaded from [here](https://drive.google.com/drive/folders/1zoe5zjWkj2KY824XWTukrXxrMno2mlN5?usp=sharing).
 
+Checkpoints can be downloaded with [gdown](https://github.com/wkentaro/gdown)
+
+```bash
+# jepa-ep300.pth.tar
+gdown 1LL3gM-i5SLDWCFyvj71M3peLeU6V2qMR
+```
+
 ## Launching Brain-JEPA pretraining
 
 ### Environment

@@ -54,6 +54,8 @@ def get_args_parser():
                         help='use_normalization')
     parser.add_argument('--downsample', action='store_true',
                         help='downsample')
+    parser.add_argument('--make_constant', action='store_true',
+                        help='make time series constant')
     parser.add_argument('--add_w', type=str,  default='origin',
                         help='add_w')
     parser.add_argument('--attn_mode', type=str, default='normal',
