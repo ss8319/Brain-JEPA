@@ -3,7 +3,7 @@
 # References:
 # capi: https://github.com/facebookresearch/capi/blob/main/eval_classification.py
 
-from typing import Literal
+from typing import Literal, Optional
 
 import torch
 import torch.nn as nn
@@ -104,10 +104,10 @@ class AttnPoolClassifier(nn.Module):
 
 
 def pool_representations(
-    cls_token: Tensor | None,
-    object_tokens: Tensor | None,
+    cls_token: Optional[Tensor],
+    object_tokens: Optional[Tensor],
     patch_tokens: Tensor,
-    representations: list[str],
+    representations: list,
 ):
     B, N, D = patch_tokens.shape
 
