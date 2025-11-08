@@ -75,6 +75,20 @@ class VisionTransformer(nn.Module):
 
         return x
 
+    def forward_embedding(self, x, masks=None):
+        """
+        Extract embeddings for probe evaluation.
+        Returns: (cls_token, object_tokens, patch_tokens)
+        Brain-JEPA doesn't have cls_token or reg_tokens, so returns (None, None, patch_tokens)
+        """
+        # Use encoder's forward_embedding if available, otherwise use forward
+        if hasattr(self.encoder, 'forward_embedding'):
+            return self.encoder.forward_embedding(x, masks=masks)
+        else:
+            # Fallback: use forward and extract patch tokens
+            patch_tokens = self.encoder(x, masks=masks, return_attention=False)
+            return None, None, patch_tokens
+
 
 def vit_base_patch16(**kwargs):
     model = VisionTransformer(
