@@ -26,7 +26,7 @@ from timm.utils import accuracy
 
 import data.flat_data as flat_data
 import downstream_tasks.models_probe as models_probe
-import flat_mae.utils as ut
+import downstream_tasks.util.misc as misc
 import flat_mae.masking as masking
 from downstream_tasks.models_vit import VisionTransformer
 
@@ -37,12 +37,13 @@ MODELS_DICT = {"VisionTransformer": VisionTransformer}
 
 def main(args: DictConfig):
     # setup
-    ut.init_distributed_mode(args)
-    global_rank = ut.get_rank()
+    misc.init_distributed_mode(args)
+    global_rank = misc.get_rank()
     is_master = global_rank == 0
-    world_size = ut.get_world_size()
+    world_size = misc.get_world_size()
     device = torch.device(args.device)
-    ut.random_seed(args.seed, rank=global_rank)
+    torch.manual_seed(args.seed)
+    np.random.seed(args.seed)
 
     if args.name and not args.output_dir.endswith(args.name):
         args.output_dir = f"{args.output_dir}/{args.name}"
@@ -66,12 +67,11 @@ def main(args: DictConfig):
                 config=OmegaConf.to_container(args),
             )
 
-    ut.setup_for_distributed(log_path=output_dir / "log.txt")
+    misc.setup_for_distributed(is_master)
 
-    print("probe eval flat map mae")
+    print("probe eval Brain-JEPA")
     print(f"start: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"cwd: {Path.cwd()}")
-    print(ut.get_sha())
     print("config:", OmegaConf.to_yaml(args), sep="\n")
 
     # data loaders
