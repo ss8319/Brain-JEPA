@@ -205,7 +205,7 @@ def main(args):
         pg.setdefault("lr", lr * lr_multiplier)
         pg.setdefault("weight_decay", weight_decay * wd_multiplier)
     # cast or else it corrupts the checkpoint
-    betas = tuple(args.betas) if args.betas is not None else None
+    betas = tuple(args.betas) if args.betas is not None else (0.9, 0.999)
     optimizer = torch.optim.AdamW(param_groups, betas=betas)
 
     epoch_num_batches = len(train_loader)
@@ -307,7 +307,7 @@ def main(args):
         print(f"Epoch: [{epoch}] Best validation scores:\n{json.dumps(best_scores)}")
         print(f"Epoch: [{epoch}] Best validation hparams:\n{json.dumps(best_hparams)}")
 
-        misc.save_model(args, epoch, model_without_ddp, optimizer, loss_scaler)
+        misc.save_model(args, epoch, model, model_without_ddp, optimizer, loss_scaler)
 
     best_classifiers = {
         (feature_source, hparam): classifiers[feature_source, hparam]
@@ -441,9 +441,13 @@ def get_embedding_shapes(
     # Move batch to device
     example_batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in example_batch.items()}
     images = example_batch["image"]
+    # Use only first sample to avoid OOM during shape inference
+    images = images[:1]
     img_mask = example_batch.get("img_mask")
+    if img_mask is not None:
+        img_mask = img_mask[:1]
 
-    cls_token, object_tokens, patch_tokens = backbone.forward_embedding(images, mask=img_mask)
+    cls_token, object_tokens, patch_tokens = backbone.forward_embedding(images)
     backbone_out = models_probe.pool_representations(
         cls_token, object_tokens, patch_tokens, representations
     )
@@ -534,7 +538,7 @@ def train_one_epoch(
     optimizer.zero_grad()
 
     for batch_idx, batch in enumerate(
-        metric_logger.log_every(data_loader, print_freq, header, total_steps=num_batches)
+        metric_logger.log_every(data_loader, print_freq, header)
     ):
         if use_cuda:
             batch = {k: v.to(device, non_blocking=True) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
@@ -566,7 +570,7 @@ def train_one_epoch(
         target = target.unsqueeze(-1).expand(*expand_shape)
 
         with torch.autocast(device_type=device.type, dtype=amp_dtype, enabled=args.amp):
-            pred = model(images, mask=img_mask)
+            pred = model(images, masks=img_mask)
             # [batch, num_classifiers] or [batch, num_targets, num_classifiers]
             all_loss = criterion(pred, target)
             all_loss = all_loss.reshape(-1, num_classifiers).mean(dim=0)
@@ -596,7 +600,7 @@ def train_one_epoch(
 
         all_loss_values = all_loss.detach().cpu().numpy()
         log_loss_dict = {
-            f"loss_{key[0]}": all_loss_values[clf_key_to_idx[key]] for key in log_classifier_keys
+            f"loss_{key[0]}": float(all_loss_values[clf_key_to_idx[key]]) for key in log_classifier_keys
         }
         metric_logger.update(loss=loss_value)
         metric_logger.update(**log_loss_dict)
@@ -620,7 +624,7 @@ def train_one_epoch(
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
     print("Averaged stats:", metric_logger)
-    return {f"train/{k}": meter.global_avg for k, meter in metric_logger.meters.items()}
+    return {f"train/{k}": float(meter.global_avg) for k, meter in metric_logger.meters.items()}
 
 
 @torch.inference_mode()
@@ -661,7 +665,7 @@ def evaluate(
     amp_dtype = getattr(torch, args.amp_dtype)
 
     for batch_idx, batch in enumerate(
-        metric_logger.log_every(data_loader, print_freq, header, total_steps=num_batches)
+        metric_logger.log_every(data_loader, print_freq, header)
     ):
         if use_cuda:
             batch = {k: v.to(device, non_blocking=True) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
@@ -676,7 +680,7 @@ def evaluate(
         target = target.unsqueeze(-1).expand(*expand_shape)
 
         with torch.autocast(device_type=device.type, dtype=amp_dtype, enabled=args.amp):
-            pred = model(images, mask=img_mask)
+            pred = model(images, masks=img_mask)
             # [batch, num_classifiers] or [batch, num_targets, num_classifiers]
             all_loss = criterion(pred, target)
             all_loss = all_loss.reshape(-1, num_classifiers).mean(dim=0)
@@ -700,9 +704,9 @@ def evaluate(
         log_metric_dict = {}
         for feature_source, hparam in log_classifier_keys:
             idx = clf_key_to_idx[(feature_source, hparam)]
-            log_metric_dict[f"loss_{feature_source}"] = all_loss_values[idx]
+            log_metric_dict[f"loss_{feature_source}"] = float(all_loss_values[idx])
             if args.task == "classification":
-                log_metric_dict[f"acc1_{feature_source}"] = all_acc1_values[idx]
+                log_metric_dict[f"acc1_{feature_source}"] = float(all_acc1_values[idx])
 
         metric_logger.update(**log_metric_dict)
 
@@ -714,12 +718,12 @@ def evaluate(
     for meter in all_meters.values():
         meter.synchronize_between_processes()
     print(f"Averaged stats ({eval_name}):", metric_logger)
-    stats = {f"eval/{eval_name}/{k}": meter.global_avg for k, meter in metric_logger.meters.items()}
+    stats = {f"eval/{eval_name}/{k}": float(meter.global_avg) for k, meter in metric_logger.meters.items()}
 
     if log_wandb:
         wandb.log(stats, step=1000 * (epoch + 1))
 
-    stats.update({f"eval/{eval_name}/{k}": meter.global_avg for k, meter in all_meters.items()})
+    stats.update({f"eval/{eval_name}/{k}": float(meter.global_avg) for k, meter in all_meters.items()})
     return stats
 
 
