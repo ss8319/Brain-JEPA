@@ -25,14 +25,14 @@ from torch.utils.data.distributed import DistributedSampler
 from timm.utils import accuracy
 
 import data.flat_data as flat_data
-import flat_mae.models_probe as models_probe
+import downstream_tasks.models_probe as models_probe
 import flat_mae.utils as ut
 import flat_mae.masking as masking
-import flat_mae.models_mae as models_mae
+from downstream_tasks.models_vit import VisionTransformer
 
 DEFAULT_CONFIG = Path(__file__).parent / "config/default_probe.yaml"
 
-MODELS_DICT = models_mae.__dict__
+MODELS_DICT = {"VisionTransformer": VisionTransformer}
 
 
 def main(args: DictConfig):
