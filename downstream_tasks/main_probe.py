@@ -204,7 +204,7 @@ def main(args: DictConfig):
         loss_scaler = None
 
     # load checkpoint/resume training
-    ut.load_model(args, model_without_ddp, optimizer, loss_scaler)
+    misc.load_model(args, model_without_ddp, optimizer, loss_scaler)
 
     # training loss
     if args.task == "classification":
@@ -279,7 +279,7 @@ def main(args: DictConfig):
         print(f"Epoch: [{epoch}] Best validation scores:\n{json.dumps(best_scores)}")
         print(f"Epoch: [{epoch}] Best validation hparams:\n{json.dumps(best_hparams)}")
 
-        ut.save_model(args, epoch, model_without_ddp, optimizer, loss_scaler)
+        misc.save_model(args, epoch, model_without_ddp, optimizer, loss_scaler)
 
     best_classifiers = {
         (feature_source, hparam): classifiers[feature_source, hparam]
@@ -479,18 +479,17 @@ def train_one_epoch(
 ):
     model.train()
 
-    metric_logger = ut.MetricLogger(delimiter="  ")
-    metric_logger.add_meter("lr", ut.SmoothedValue(window_size=1, fmt="{value:.6f}"))
-    metric_logger.add_meter("grad", ut.SmoothedValue())
+    metric_logger = misc.MetricLogger(delimiter="  ")
+    metric_logger.add_meter("lr", misc.SmoothedValue(window_size=1, fmt="{value:.6f}"))
+    metric_logger.add_meter("grad", misc.SmoothedValue())
     header = f"Train: [{epoch}]"
-    log_wandb = args.wandb and ut.is_main_process()
+    log_wandb = args.get("wandb", False) and misc.is_main_process()
 
     epoch_num_batches = len(data_loader)
     steps_per_epoch = epoch_num_batches // args.accum_iter
 
     use_cuda = device.type == "cuda"
-    if use_cuda and args.presend_cuda:
-        data_loader = ut.pre_send_to_cuda_wrapper(data_loader, device)
+    # Brain-JEPA doesn't use pre_send_to_cuda_wrapper
 
     print_freq = args.get("print_freq", 20) if not args.debug else 1
     num_batches = epoch_num_batches if not args.debug else 10
@@ -507,8 +506,8 @@ def train_one_epoch(
     for batch_idx, batch in enumerate(
         metric_logger.log_every(data_loader, print_freq, header, total_steps=num_batches)
     ):
-        if use_cuda and not args.presend_cuda:
-            batch = ut.send_data(batch, device)
+        if use_cuda:
+            batch = {k: v.to(device, non_blocking=True) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
 
         batch_step = batch_idx + 1
         global_step = epoch * steps_per_epoch + batch_step // args.accum_iter
@@ -547,13 +546,22 @@ def train_one_epoch(
         if not math.isfinite(loss_value):
             raise RuntimeError(f"Loss is {loss_value}, stopping training")
 
-        grad_norm = ut.backward_step(
-            loss / args.accum_iter,
-            optimizer,
-            scaler=loss_scaler,
-            need_update=need_update,
-            max_norm=args.clip_grad,
-        )
+        # Backward pass with gradient accumulation
+        (loss / args.accum_iter).backward()
+        if need_update:
+            if loss_scaler is not None:
+                loss_scaler.unscale_(optimizer)
+            grad_norm = misc.get_grad_norm_(model.parameters())
+            if args.get("clip_grad") is not None:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad)
+            if loss_scaler is not None:
+                loss_scaler.step(optimizer)
+                loss_scaler.update()
+            else:
+                optimizer.step()
+            optimizer.zero_grad()
+        else:
+            grad_norm = None
 
         all_loss_values = all_loss.detach().cpu().numpy()
         log_loss_dict = {
@@ -600,15 +608,14 @@ def evaluate(
     """
     model.eval()
 
-    metric_logger = ut.MetricLogger(delimiter="  ")
+    metric_logger = misc.MetricLogger(delimiter="  ")
     header = f"Eval ({eval_name}): [{epoch}]"
-    log_wandb = args.wandb and ut.is_main_process()
+    log_wandb = args.get("wandb", False) and misc.is_main_process()
 
     epoch_num_batches = len(data_loader)
 
     use_cuda = device.type == "cuda"
-    if use_cuda and args.presend_cuda:
-        data_loader = ut.pre_send_to_cuda_wrapper(data_loader, device)
+    # Brain-JEPA doesn't use pre_send_to_cuda_wrapper
 
     print_freq = args.get("print_freq", 20) if not args.debug else 1
     num_batches = epoch_num_batches if not args.debug else 10
@@ -618,15 +625,15 @@ def evaluate(
     clf_key_to_idx = {key: ii for ii, key in enumerate(classifier_keys)}
     num_classifiers = len(classifier_keys)
 
-    all_meters = defaultdict(ut.SmoothedValue)
+    all_meters = defaultdict(misc.SmoothedValue)
 
     amp_dtype = getattr(torch, args.amp_dtype)
 
     for batch_idx, batch in enumerate(
         metric_logger.log_every(data_loader, print_freq, header, total_steps=num_batches)
     ):
-        if use_cuda and not args.presend_cuda:
-            batch = ut.send_data(batch, device)
+        if use_cuda:
+            batch = {k: v.to(device, non_blocking=True) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
 
         images = batch["image"]
         img_mask = batch.get("img_mask")
