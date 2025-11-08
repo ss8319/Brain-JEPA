@@ -7,6 +7,7 @@ import json
 
 from downstream_tasks.main_finetune import main as ft_main
 from downstream_tasks.main_linprobe import main as lp_main
+from downstream_tasks.main_probe import main as ap_main
 
 import builtins
 
@@ -82,6 +83,16 @@ def get_args_parser():
     parser.add_argument('--data_path', type=str, default='data/',
                         help='Path to processed dataset directory')
     
+    # Attentive probe specific arguments
+    parser.add_argument('--representations', type=str, nargs='+', default=None,
+                        help='Representations to probe (e.g., avg_patch patch)')
+    parser.add_argument('--lr_scale_grid', type=float, nargs='+', default=None,
+                        help='Learning rate scale grid for probe')
+    parser.add_argument('--weight_decay_grid', type=float, nargs='+', default=None,
+                        help='Weight decay grid for probe')
+    parser.add_argument('--attn_pool_embed_dim', type=int, default=None,
+                        help='Embedding dimension for attention pooling classifier')
+    
     return parser
 
 
@@ -125,6 +136,8 @@ if __name__ == '__main__':
         os.makedirs(args.output_dir, exist_ok=True)
         if args.downstream_task == 'fine_tune':
             ft_main(args)
+        elif args.downstream_task == 'attentive_probe':
+            ap_main(args)
         else:
             lp_main(args)
 
@@ -147,6 +160,8 @@ if __name__ == '__main__':
         
         if args.downstream_task == 'fine_tune':
             ft_main(args)
+        elif args.downstream_task == 'attentive_probe':
+            ap_main(args)
         else:
             lp_main(args)
 
