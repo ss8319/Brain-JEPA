@@ -1,0 +1,89 @@
+# Default config for attentive probe evaluation
+# This config is used when running main_probe.py standalone
+
+# Task configuration
+task: classification  # classification or regression
+num_classes: 2
+
+# Model configuration
+model_name: vit_base
+attn_mode: flash_attn
+add_w: mapping
+crop_size: [450, 160]
+patch_size: 16
+pred_depth: 12
+pred_emb_dim: 384
+gradient_checkpointing: false
+global_pool: false
+
+# Data configuration
+data_make_fn: hca_sex  # hca_sex or hcya_sex
+data_path: 's3://medarc/fmri-fm/datasets/hcp-parc-v2'  # Path to processed dataset directory (or s3:// path)
+use_normalization: true
+downsample: true
+make_constant: false
+
+# Dataset names (for logging/evaluation)
+train_dataset: train
+val_dataset: valid
+test_dataset: test
+eval_datasets: []
+
+# Probe-specific configuration
+representations: [avg_patch, patch]  # Representations to probe
+lr_scale_grid: [0.3, 1.0, 3.0]  # Learning rate scale grid (more aggressive, narrow)
+weight_decay_grid: [0.0001, 0.001, 0.01]  # Weight decay grid (narrower, lower WD)
+attn_pool_embed_dim: null  # Embedding dimension for attention pooling (optional)
+
+# Training configuration
+batch_size: 32
+accum_iter: 1
+epochs: 50
+warmup_epochs: 5
+start_epoch: 0
+lr: null  # If null, will be computed from base_lr
+base_lr: 0.001
+min_lr: 0.000001
+weight_decay: 0.05
+betas: null  # AdamW betas, default is (0.9, 0.999)
+
+# Optimization
+clip_grad: null
+amp: false
+amp_dtype: float32
+
+# Checkpointing
+load_path: '/teamspace/gcs_folders/share/fmri-fm/brain-jepa/jepa-ep300.pth.tar'  # Path to pretrained checkpoint
+pretrain_ckpt: ''  # Alternative name for load_path
+finetune: false  # If true, finetune backbone; if false, freeze it
+
+# Output configuration
+output_dir: ./output_dir/attentive_probe
+name: null  # Experiment name (optional)
+log_dir: null  # Log directory (optional)
+
+# Distributed training
+distributed: false
+dist_on_itp: false
+gpu: 0
+device: cuda
+world_size: 1
+rank: 0
+local_rank: -1
+dist_url: null
+dist_backend: nccl
+
+# Misc
+seed: 0
+num_workers: 8
+pin_mem: true
+debug: false
+print_freq: 20
+presend_cuda: false
+
+# Wandb (optional)
+wandb: false
+wandb_entity: null
+wandb_project: null
+wandb_notes: null
+
