@@ -35,6 +35,20 @@ DEFAULT_CONFIG = Path(__file__).parent / "config/default_probe.yaml"
 MODELS_DICT = {"VisionTransformer": VisionTransformer}
 
 
+def warmup_cosine_schedule(base_value, final_value, total_iters, warmup_iters):
+    """Generate warmup + cosine annealing LR schedule as a list
+       Simplified version of the original code in flat_mae.utils.WarmupThenCosine"""
+    schedule = []
+    for i in range(total_iters):
+        if i < warmup_iters:
+            lr = base_value * (i / warmup_iters)
+        else:
+            progress = (i - warmup_iters) / (total_iters - warmup_iters)
+            lr = final_value + (base_value - final_value) * 0.5 * (1 + math.cos(math.pi * progress))
+        schedule.append(lr)
+    return schedule
+
+
 def main(args: DictConfig):
     # setup
     misc.init_distributed_mode(args)
@@ -154,8 +168,13 @@ def main(args: DictConfig):
         print(f"lr: {args.lr:.2e}")
 
     param_groups = backbone_param_groups + classifier_param_groups
-    ut.update_lr(param_groups, args.lr)
-    ut.update_wd(param_groups, args.weight_decay)
+    # Set initial LR and weight decay for all param groups
+    # Note: lr_multiplier and wd_multiplier are set by make_classifiers() for classifier heads
+    for pg in param_groups:
+        lr_multiplier = pg.get("lr_multiplier", 1.0)
+        wd_multiplier = pg.get("wd_multiplier", 1.0)
+        pg.setdefault("lr", args.lr * lr_multiplier)
+        pg.setdefault("weight_decay", args.weight_decay * wd_multiplier)
     # cast or else it corrupts the checkpoint
     betas = tuple(args.betas) if args.betas is not None else None
     optimizer = torch.optim.AdamW(param_groups, betas=betas)
@@ -164,7 +183,7 @@ def main(args: DictConfig):
     steps_per_epoch = epoch_num_batches // args.accum_iter
     total_steps = args.epochs * steps_per_epoch
     warmup_steps = args.warmup_epochs * steps_per_epoch
-    lr_schedule = ut.WarmupThenCosine(
+    lr_schedule = warmup_cosine_schedule(
         base_value=args.lr,
         final_value=args.min_lr,
         total_iters=total_steps,
@@ -483,7 +502,9 @@ def train_one_epoch(
         need_update = batch_step % args.accum_iter == 0
 
         if need_update:
-            ut.update_lr(optimizer.param_groups, lr)
+            for pg in optimizer.param_groups:
+                lr_multiplier = pg.get("lr_multiplier", 1.0)
+                pg['lr'] = lr * lr_multiplier
 
         images = batch["image"]
         img_mask = batch.get("img_mask")
