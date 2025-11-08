@@ -517,6 +517,18 @@ class VisionTransformer(nn.Module):
             return x, attn_set
         return x
 
+    def forward_embedding(self, x, masks=None):
+        """
+        Extract embeddings for probe evaluation.
+        Returns: (cls_token, object_tokens, patch_tokens)
+        Brain-JEPA doesn't have cls_token or reg_tokens, so returns (None, None, patch_tokens)
+        """
+        # Use forward() to get patch tokens
+        patch_tokens = self.forward(x, masks=masks, return_attention=False)
+        # Return format: (cls_token, object_tokens, patch_tokens)
+        # Brain-JEPA only has patch tokens, no cls_token or reg_tokens
+        return None, None, patch_tokens
+
     def interpolate_pos_encoding(self, x, pos_embed):
         npatch = x.shape[1] - 1
         N = pos_embed.shape[1] - 1
