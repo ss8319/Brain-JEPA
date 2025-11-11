@@ -99,7 +99,6 @@ def main(args):
                 entity=args.wandb_entity,
                 project=args.wandb_project,
                 name=args.name,
-                notes=args.notes,
                 config=OmegaConf.to_container(args),
             )
 
