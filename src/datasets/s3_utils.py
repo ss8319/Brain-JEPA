@@ -1,6 +1,7 @@
 """Utilities for S3 operations in dataset loading"""
 import os
 import re
+import datetime
 from pathlib import Path
 
 try:
@@ -70,12 +71,23 @@ def ensure_s3_files_cached(s3_path, cache_dir='~/.cache/brain-jepa', force_downl
         
         # Check if file exists locally
         if os.path.exists(local_path) and not force_download:
-            # Check if S3 file is newer (optional: could check ETag/LastModified)
+            # Check if S3 file is newer than local cache
             try:
-                s3.head_object(Bucket=bucket, Key=s3_key)
-                skipped += 1
-                print(f"  ✓ Using cached: {filename}")
-                continue
+                s3_response = s3.head_object(Bucket=bucket, Key=s3_key)
+                s3_last_modified = s3_response['LastModified']
+                
+                # Get local file modification time
+                local_mtime = os.path.getmtime(local_path)
+                local_mtime_dt = datetime.datetime.fromtimestamp(local_mtime, tz=s3_last_modified.tzinfo)
+                
+                # Download if S3 file is newer
+                if s3_last_modified > local_mtime_dt:
+                    print(f"  ↻ S3 file newer, re-downloading: {filename}")
+                    # Continue to download section below
+                else:
+                    skipped += 1
+                    print(f"  ✓ Using cached: {filename}")
+                    continue
             except s3.exceptions.ClientError:
                 # File doesn't exist on S3 or error, use local cache
                 print(f"  ⚠ Using local cache (S3 check failed): {filename}")
