@@ -230,6 +230,10 @@ def main(args):
         loss_scaler = torch.GradScaler(device.type)
     else:
         loss_scaler = None
+    # Debug: count trainable vs frozen params
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    frozen_params = sum(p.numel() for p in model.parameters() if not p.requires_grad)
+    print(f"debug: trainable_params={trainable_params}, frozen_params={frozen_params}")
 
     # load checkpoint/resume training
     misc.load_model(args, model_without_ddp, optimizer, loss_scaler)
@@ -540,11 +544,17 @@ def train_one_epoch(
     for batch_idx, batch in enumerate(
         metric_logger.log_every(data_loader, print_freq, header)
     ):
+        # Debug: confirm per-group LR values on first batch
+        if batch_idx == 0:
+            lr_values = sorted({pg.get('lr', None) for pg in optimizer.param_groups})
+            print(f"debug: step0 param_group_lrs={lr_values}")
         if use_cuda:
             batch = {k: v.to(device, non_blocking=True) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
 
         batch_step = batch_idx + 1
-        global_step = epoch * steps_per_epoch + batch_step // accum_iter
+        global_step = epoch * steps_per_epoch + batch_idx // accum_iter
+        # Clamp global_step to valid range to prevent IndexError
+        global_step = min(global_step, len(lr_schedule) - 1)
         lr = lr_schedule[global_step]
         need_update = batch_step % accum_iter == 0
 
