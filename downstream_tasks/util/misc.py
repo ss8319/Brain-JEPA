@@ -293,21 +293,25 @@ def save_model(args, epoch, model, model_without_ddp, optimizer, loss_scaler):
     output_dir = Path(args.output_dir)
     epoch_name = str(epoch)
     if (epoch+1) % 50 == 0:
-        if loss_scaler is not None:
+        # Check if model has DeepSpeed's save_checkpoint method
+        if hasattr(model, 'save_checkpoint'):
+            # DeepSpeed checkpoint saving
+            client_state = {'epoch': epoch}
+            model.save_checkpoint(save_dir=args.output_dir, tag="checkpoint-%s" % epoch_name, client_state=client_state)
+        else:
+            # Standard PyTorch checkpoint saving
             checkpoint_paths = [output_dir / ('checkpoint-%s.pth' % epoch_name)]
             for checkpoint_path in checkpoint_paths:
                 to_save = {
                     'model': model_without_ddp.state_dict(),
                     'optimizer': optimizer.state_dict(),
                     'epoch': epoch,
-                    'scaler': loss_scaler.state_dict(),
                     'args': args,
                 }
+                if loss_scaler is not None:
+                    to_save['scaler'] = loss_scaler.state_dict()
 
                 save_on_master(to_save, checkpoint_path)
-        else:
-            client_state = {'epoch': epoch}
-            model.save_checkpoint(save_dir=args.output_dir, tag="checkpoint-%s" % epoch_name, client_state=client_state)
 
 
 def load_model(args, model_without_ddp, optimizer, loss_scaler):
