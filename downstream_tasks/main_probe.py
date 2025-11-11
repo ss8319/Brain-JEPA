@@ -210,7 +210,7 @@ def main(args):
 
     epoch_num_batches = len(train_loader)
     accum_iter = _get_arg(args, "accum_iter", 1)
-    steps_per_epoch = epoch_num_batches // accum_iter
+    steps_per_epoch = math.ceil(epoch_num_batches / accum_iter)
     epochs = _get_arg(args, "epochs", 50)
     warmup_epochs = _get_arg(args, "warmup_epochs", 5)
     total_steps = epochs * steps_per_epoch
@@ -524,7 +524,7 @@ def train_one_epoch(
 
     epoch_num_batches = len(data_loader)
     accum_iter = _get_arg(args, "accum_iter", 1)
-    steps_per_epoch = epoch_num_batches // accum_iter
+    steps_per_epoch = math.ceil(epoch_num_batches / accum_iter)
 
     use_cuda = device.type == "cuda"
     # Brain-JEPA doesn't use pre_send_to_cuda_wrapper
